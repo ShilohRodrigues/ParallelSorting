@@ -1,8 +1,9 @@
-#include "mpi.h"
 #include <stdio.h>
 #include <stdlib.h>
 
-#define MASTER 0        /* task ID of master task */
+void quicksort(int* data, int low, int high);
+int partition(int* data, int low, int high);
+void swap(int* a, int* b);
 
 int main(int argc, char *argv[]) {
 
@@ -53,45 +54,60 @@ int main(int argc, char *argv[]) {
   }
   printf("\n");
 
-  /**
-   * Hypercube quick sort
-  */
+  //Perform quicksort
+  quicksort(data, 0, size-1);
 
-  int	  taskid,	       /* task ID - also used as seed number */
-        numtasks,      /* number of tasks */
-        rc;            /* return code */
-  MPI_Status status;
-
-  // Start separate tasks and get task ids 
-  MPI_Init(&argc,&argv);
-  MPI_Comm_size(MPI_COMM_WORLD,&numtasks);
-  MPI_Comm_rank(MPI_COMM_WORLD,&taskid);
-  printf ("MPI task %d has started...\n", taskid);
-
-  //Ensure that the number of processors is valid for a hypercube, i.e. powers of 2
-  if ((numtasks & (numtasks - 1)) != 0) {
-    printf("Number of processors must be a power of 2 for a hypercube topology.");
-    fclose(fp);
-    free(data);
-    MPI_Abort(MPI_COMM_WORLD, 1);
-  } 
-
-  // Determine which section of data to sort, each task sorts n / p data
-
-  // Loop for every dimension of the hypercube
-
-    // Assign the pivot to partition around
-
-    // Partition the data 
-
-  // Sort data using sequential quicksort
-
+  // Print sorted array
+  for(int i = 0; i < size; i++) {
+    printf("%d ", data[i]);
+  }
+  printf("\n");
 
   //Clean up
   fclose(fp);
   free(data);
-  MPI_Finalize();
 
   return 0;
 }
 
+/**
+ * Swaps two elements, passed by reference so that the original references are swapped
+*/
+void swap(int* a, int* b) {
+  int temp = *a;
+  *a = *b;
+  *b = temp;
+}
+
+/**
+ * Partitions the array using the rightmost index
+*/
+int partition(int* data, int low, int high) {
+
+  int pivot = data[high];
+  int i = (low - 1);
+
+  for(int j = low; j < high; j++) {
+    if(data[j] <= pivot) {
+      i++;
+      swap(&data[i], &data[j]);
+    }
+  }
+  swap(&data[i+1], &data[high]);
+
+  return (i+1);
+
+}
+
+/**
+ * Recursive quicksort 
+*/
+void quicksort(int* data, int low, int high) {
+
+  if (low >= high) return;
+
+  int p = partition(data, low, high);
+  quicksort(data, low, p-1);
+  quicksort(data, p+1, high);
+
+}
