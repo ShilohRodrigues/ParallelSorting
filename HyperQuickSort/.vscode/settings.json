@@ -1,0 +1,11 @@
+{
+  "files.associations": {
+    "*.module": "php",
+    "quicksort.h": "c",
+    "stdio.h": "c",
+    "stdlib.h": "c",
+    "array": "c",
+    "string": "c",
+    "string_view": "c"
+  }
+}
