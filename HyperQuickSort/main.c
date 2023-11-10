@@ -55,7 +55,8 @@ int main(int argc, char *argv[]) {
   fclose(fp); // Close the file
 
   // Print the numbers to verify
-  for(int i = 0; i < size; i++) {
+  int i;
+  for(i = 0; i < size; i++) {
     printf("%d ", data[i]);
   }
   printf("\n");
@@ -98,7 +99,7 @@ int main(int argc, char *argv[]) {
   int *merged_data = NULL;
 
   // Loop for every dimension of the hypercube
-  for (int i = 0; i < d; i++) {
+  for (i = 0; i < d; i++) {
 
     // Master process selects the pivot and broadcast to the other processes 
     int pivot = data_block[block_size-1];
@@ -171,8 +172,9 @@ int main(int argc, char *argv[]) {
 int parallel_partition(int *data_block, int low, int high, int pivot) {
 
   int i = (low - 1);
+  int j;
 
-  for (int j = low; j < high; j++) {
+  for (j = low; j < high; j++) {
 		if (data_block[j] <= pivot) {
 			i++;
 			int temp = data_block[i];
