@@ -233,8 +233,8 @@ int sequential_partition(int* data, int low, int high) {
 
   int pivot = data[high];
   int i = (low - 1);
-
-  for(int j = low; j < high; j++) {
+  int j;
+  for(j = low; j < high; j++) {
     if(data[j] <= pivot) {
       i++;
       swap(&data[i], &data[j]);
