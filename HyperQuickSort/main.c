@@ -1,4 +1,3 @@
-#include "../SequentialQuickSort/quicksort.h"
 #include "mpi.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -7,8 +6,11 @@
 
 #define MASTER 0 // task ID of master task 
 
+void swap(int* a, int* b);
 int parallel_partition(int *data_block, int low, int high, int pivot);
 void merge_arrays(int *merged_data, int *send_data, int send_count, int *recv_data, int recv_count);
+int sequential_partition(int* data, int low, int high);
+void sequential_quicksort(int* data, int low, int high);
 
 int main(int argc, char *argv[]) {
 
@@ -159,7 +161,7 @@ int main(int argc, char *argv[]) {
   }
 
   // Sort data using sequential quicksort
-  quicksort(data_block, 0, block_size-1);
+  sequential_quicksort(data_block, 0, block_size-1);
 
   //Clean up
   free(data_block);
@@ -169,6 +171,18 @@ int main(int argc, char *argv[]) {
   return 0;
 }
 
+/**
+ * Swaps two elements, passed by reference so that the original references are swapped
+*/
+void swap(int* a, int* b) {
+  int temp = *a;
+  *a = *b;
+  *b = temp;
+}
+
+/**
+ * Parallel partitioning function
+*/
 int parallel_partition(int *data_block, int low, int high, int pivot) {
 
   int i = (low - 1);
@@ -177,19 +191,18 @@ int parallel_partition(int *data_block, int low, int high, int pivot) {
   for (j = low; j < high; j++) {
 		if (data_block[j] <= pivot) {
 			i++;
-			int temp = data_block[i];
-			data_block[i] = data_block[j];
-			data_block[j] = temp;
+			swap(&data_block[i], &data_block[j]);
 		}
 	}
-	int temp = data_block[i + 1];
-	data_block[i + 1] = data_block[high];
-	data_block[high] = temp;
+	swap(&data_block[i+1], &data_block[high]);
 
 	return (data_block[i + 1] > pivot) ? i : (i + 1);
 
 }
 
+/**
+ * Merges two sorted arrays
+*/
 void merge_arrays(int *merged_data, int *send_data, int send_count, int *recv_data, int recv_count) {
     int i = 0, j = 0, k = 0;
 
@@ -211,4 +224,37 @@ void merge_arrays(int *merged_data, int *send_data, int send_count, int *recv_da
     while (j < recv_count) {
         merged_data[k++] = recv_data[j++];
     }
+}
+
+/**
+ * Partitions the array using the rightmost index
+*/
+int sequential_partition(int* data, int low, int high) {
+
+  int pivot = data[high];
+  int i = (low - 1);
+
+  for(int j = low; j < high; j++) {
+    if(data[j] <= pivot) {
+      i++;
+      swap(&data[i], &data[j]);
+    }
+  }
+  swap(&data[i+1], &data[high]);
+
+  return (i+1);
+
+}
+
+/**
+ * Recursive quicksort 
+*/
+void sequential_quicksort(int* data, int low, int high) {
+
+  if (low >= high) return;
+
+  int p = sequential_partition(data, low, high);
+  sequential_quicksort(data, low, p-1);
+  sequential_quicksort(data, p+1, high);
+
 }
