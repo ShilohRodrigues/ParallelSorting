@@ -14,62 +14,21 @@ void sequential_quicksort(int* data, int low, int high);
 
 int main(int argc, char *argv[]) {
 
-  /**
-   * Check if there is an input file present and parse the data from the file
-   * Check command line arg for file name, otherwise use default input.txt
-   * Parses for space separated integers.
-  */
-  FILE *fp;
-  int *data = NULL; // Holds the data to be sorted
-  int size = 0;
-  int capacity = 10; // Will grow as needed
-
-  // Attempt to open the file
-  if ( argc != 2 )
-    fp = fopen("../input.txt", "r");
-  else
-    fp = fopen(argv[1], "r");
-
-  if (fp == NULL) { 
-    return 1; // Could not open the file
-  }
-
-  // Allocate initial memory to the data array
-  data = (int *)malloc(capacity * sizeof(int));
-  if (!data) {
-    fclose(fp);
-    return 1; // Could not allocate memory
-  }
-
-  // Read the input file and parse for integers
-  while (fscanf(fp, "%d", &data[size]) != EOF) {
-    size++;
-    if (size >= capacity) {
-      // Double the capacity if needed
-      capacity *= 2;
-      data = (int *)realloc(data, capacity * sizeof(int));
-      if (!data) {
-          fclose(fp);
-          return 1; // Could not allocate memory
-      }
-    }
-  }
-  fclose(fp); // Close the file
-
-  // Print the numbers to verify
-  int i;
-  for(i = 0; i < size; i++) {
-    printf("%d ", data[i]);
-  }
-  printf("\n");
-
-  /**
-   * Hypercube quick sort:
-   * Selects the rightmost index as pivot... Not a good pivot selection, done for simplicity * for now..
+  /** 
+   * Start processes, get ranks and size 
   */
   int	  p_id,	     // process ID 
         p,         // number of processors 
-        rc;        // return code 
+        rc,        // return code 
+        d,         // dimensions in hypercube
+        i;         // for loop counter
+    
+  int *data = NULL; // Holds the data to be sorted
+  int size = 0;
+  int capacity = 10; // Will grow as needed
+  int *data_block = NULL; // Holds the data for each process (size = n/p)
+  int block_size;
+
   MPI_Status status;
 
   // Start separate tasks and get task ids 
@@ -86,18 +45,77 @@ int main(int argc, char *argv[]) {
   } 
 
   // # of dimensions of the hcube equals log base 2 of # processors
-  int d = (int)(log(p) / log(2));
+  d = (int)(log(p) / log(2));
 
-  // Get the data block that each process will be assigned
-  int block_size = (int)ceil((double)size / p);
-  int *data_block = (int *)malloc(block_size * sizeof(int));
+  /**
+   * Master process reads input file
+   * Check if there is an input file present and parse the data from the file
+   * Check command line arg for file name, otherwise use default input.txt
+   * Parses for space separated integers.
+  */
+  if (p_id == MASTER) {
+
+    FILE *fp;
+
+    // Attempt to open the file
+    if ( argc != 2 )
+      fp = fopen("../input.txt", "r");
+    else
+      fp = fopen(argv[1], "r");
+
+    if (fp == NULL) { 
+      return 1; // Could not open the file
+    }
+
+    // Allocate initial memory to the data array
+    data = (int *)malloc(capacity * sizeof(int));
+    if (!data) {
+      fclose(fp);
+      return 1; // Could not allocate memory
+    }
+
+    // Read the input file and parse for integers
+    while (fscanf(fp, "%d", &data[size]) != EOF) {
+      size++;
+      if (size >= capacity) {
+        // Double the capacity if needed
+        capacity *= 2;
+        data = (int *)realloc(data, capacity * sizeof(int));
+        if (!data) {
+            fclose(fp);
+            return 1; // Could not allocate memory
+        }
+      }
+    }
+    fclose(fp); // Close the file
+
+    // Print the numbers to verify
+    for(i = 0; i < size; i++) {
+      printf("%d ", data[i]);
+    }
+    printf("\n");
+    
+  }
+
+  // Set the size of the input data to each process, so they can calculate their block size
+  MPI_Bcast(&size, 1, MPI_INT, MASTER, MPI_COMM_WORLD);
+
+  // Calculate the size of each data block
+  block_size = (int)ceil((double)size / p);
+  *data_block = (int *)malloc(block_size * sizeof(int));
   if (!data_block) {
     printf("Unable to allocate memory for the data block.");
     free(data);
     MPI_Abort(MPI_COMM_WORLD, 1);
   }
-  memcpy(data_block, &data[p_id * block_size], block_size * sizeof(int));
+  
+  // Scatter the data array to the other processes
+  MPI_Scatter(data, block_size, MPI_INT, data_block, block_size, MPI_INT, MASTER, MPI_COMM_WORLD);
 
+  /**
+   * Hypercube quick sort:
+   * Selects the rightmost index as pivot... Not a good pivot selection, done for simplicity * for now..
+  */
   int *merged_data = NULL;
 
   // Loop for every dimension of the hypercube
