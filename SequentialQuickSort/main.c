@@ -16,7 +16,7 @@ int main(int argc, char *argv[]) {
 
   // Attempt to open the file
   if ( argc != 2 )
-    fp = fopen("input.txt", "r");
+    fp = fopen("../input.txt", "r");
   else
     fp = fopen(argv[1], "r");
 
