@@ -1,4 +1,4 @@
-#include "mpi.h"
+#include <mpi.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
@@ -28,6 +28,7 @@ int main(int argc, char *argv[]) {
   int capacity = 10; // Will grow as needed
   int *data_block = NULL; // Holds the data for each process (size = n/p)
   int block_size;
+  int *sorted_data = NULL;
 
   MPI_Status status;
 
@@ -35,17 +36,13 @@ int main(int argc, char *argv[]) {
   MPI_Init(&argc,&argv);
   MPI_Comm_size(MPI_COMM_WORLD,&p);
   MPI_Comm_rank(MPI_COMM_WORLD,&p_id);
-  printf ("MPI task %d has started...\n", p_id);
+  if (p_id == MASTER) printf("%d MPI processes started...\n\n", p);
 
   // Ensure that the number of processors is valid for a hypercube, i.e. powers of 2
   if ((p & (p - 1)) != 0) {
     printf("Number of processors must be a power of 2 for a hypercube topology."); 
-    free(data);
     MPI_Abort(MPI_COMM_WORLD, 1);
   } 
-
-  // # of dimensions of the hcube equals log base 2 of # processors
-  d = (int)(log(p) / log(2));
 
   /**
    * Master process reads input file
@@ -64,14 +61,14 @@ int main(int argc, char *argv[]) {
       fp = fopen(argv[1], "r");
 
     if (fp == NULL) { 
-      return 1; // Could not open the file
+      MPI_Abort(MPI_COMM_WORLD, 1);
     }
 
     // Allocate initial memory to the data array
     data = (int *)malloc(capacity * sizeof(int));
     if (!data) {
       fclose(fp);
-      return 1; // Could not allocate memory
+      MPI_Abort(MPI_COMM_WORLD, 1);
     }
 
     // Read the input file and parse for integers
@@ -83,7 +80,7 @@ int main(int argc, char *argv[]) {
         data = (int *)realloc(data, capacity * sizeof(int));
         if (!data) {
             fclose(fp);
-            return 1; // Could not allocate memory
+            MPI_Abort(MPI_COMM_WORLD, 1);
         }
       }
     }
@@ -102,23 +99,35 @@ int main(int argc, char *argv[]) {
 
   // Calculate the size of each data block
   block_size = (int)ceil((double)size / p);
-  *data_block = (int *)malloc(block_size * sizeof(int));
+  data_block = (int *)malloc(block_size * sizeof(int));
   if (!data_block) {
     printf("Unable to allocate memory for the data block.");
-    free(data);
     MPI_Abort(MPI_COMM_WORLD, 1);
   }
   
   // Scatter the data array to the other processes
   MPI_Scatter(data, block_size, MPI_INT, data_block, block_size, MPI_INT, MASTER, MPI_COMM_WORLD);
 
+  // Free data block since it is separated amongst processes
+  if (p_id == MASTER) free(data);
+
   /**
    * Hypercube quick sort:
    * Selects the rightmost index as pivot... Not a good pivot selection, done for simplicity * for now..
   */
-  int *merged_data = NULL;
 
-  // Loop for every dimension of the hypercube
+  //Allocate memory for merged data
+  int *merged_data = NULL;
+  merged_data = (int *)malloc((block_size * 2) * sizeof(int)); // Allocate enough memory
+  if (merged_data == NULL) {
+    printf("Unable to allocate memory for merged data.\n");
+    MPI_Abort(MPI_COMM_WORLD, 1);
+  }
+
+  // // # of dimensions of the hcube equals log base 2 of # processors
+  d = (int)(log(p) / log(2));
+
+  // // Loop for every dimension of the hypercube
   for (i = 0; i < d; i++) {
 
     // Master process selects the pivot and broadcast to the other processes 
@@ -137,9 +146,7 @@ int main(int argc, char *argv[]) {
     int recv_count;
 
     // Exchange data sizes with the neighboring process
-    MPI_Sendrecv(&send_count, 1, MPI_INT, neighbor_id, 0, 
-                 &recv_count, 1, MPI_INT, neighbor_id, 0, 
-                 MPI_COMM_WORLD, &status);
+    MPI_Sendrecv(&send_count, 1, MPI_INT, neighbor_id, 0, &recv_count, 1, MPI_INT, neighbor_id, 0, MPI_COMM_WORLD, &status);
 
     // Allocate buffer for the incoming data
     int *recv_data = (int *)malloc(recv_count * sizeof(int));
@@ -150,19 +157,7 @@ int main(int argc, char *argv[]) {
     }
 
     // Exchange the partitioned data with the neighboring process
-    MPI_Sendrecv(send_data, send_count, MPI_INT, neighbor_id, 0, 
-                 recv_data, recv_count, MPI_INT, neighbor_id, 0, 
-                 MPI_COMM_WORLD, &status);
-
-    // Allocate memory for merged data if needed
-    if (merged_data == NULL) {
-      merged_data = (int *)malloc((block_size * 2) * sizeof(int)); // Allocate enough memory
-      if (merged_data == NULL) {
-        printf("Unable to allocate memory for merged data.\n");
-        free(data);
-        MPI_Abort(MPI_COMM_WORLD, 1);
-      }
-    }
+    MPI_Sendrecv(send_data, send_count, MPI_INT, neighbor_id, 0, recv_data, recv_count, MPI_INT, neighbor_id, 0, MPI_COMM_WORLD, &status);
 
     // Merge the data sets into data_block
     merge_arrays(merged_data, send_data, send_count, recv_data, recv_count);
@@ -172,8 +167,6 @@ int main(int argc, char *argv[]) {
     data_block = merged_data; 
     merged_data = NULL;
     block_size = send_count + recv_count;
-
-    // Finished with this array, since it was merged
     free(recv_data);
 
   }
@@ -181,11 +174,31 @@ int main(int argc, char *argv[]) {
   // Sort data using sequential quicksort
   sequential_quicksort(data_block, 0, block_size-1);
 
-  //Clean up
+  // Gather all the processes data to the final sorted dataset
+  if (p_id == MASTER) {
+    sorted_data = (int *)malloc(size * sizeof(int));
+    if (!sorted_data) {
+      printf("Error: Unable to allocate memory for the sorted data.\n");
+      MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+  }
+  MPI_Gather(data_block, block_size, MPI_INT, sorted_data, block_size, MPI_INT, MASTER, MPI_COMM_WORLD);
+  
+  // Print the sorted array to verify
+  if (p_id == MASTER) {
+    printf("\n"); 
+    for(i = 0; i < size; i++) {
+      printf("%d ", sorted_data[i]);
+    }
+    printf("\n"); 
+    free(sorted_data);
+  }
+
+  // Clean up
+  free(merged_data);
   free(data_block);
   MPI_Finalize();
-  free(data);
-
+  
   return 0;
 }
 
