@@ -166,57 +166,72 @@ int main(int argc, char *argv[]) {
   // Partition the local sublists based on the received pivots
   int *send_counts = (int *)calloc(p, sizeof(int));
   int *send_displs = (int *)calloc(p, sizeof(int));
-  int **send_buffers = malloc(p * sizeof(int*));
+  int *recv_counts = (int *)malloc(p * sizeof(int));
+  int *recv_displs = (int *)malloc(p * sizeof(int));
 
+  // Calculate the send counts and displacements
   int current_pivot = 0;
-  send_buffers[0] = data_block; // first partition starts at the beginning of data_block
-
   for (i = 0; i < block_size; i++) {
-      if (current_pivot < (p-1) && data_block[i] > pivots[current_pivot]) {
-          send_displs[current_pivot + 1] = i;
-          send_buffers[current_pivot + 1] = &data_block[i];
-          send_counts[current_pivot] = send_buffers[current_pivot + 1] - send_buffers[current_pivot];
-          current_pivot++;
-      }
+    if (current_pivot < (p-1) && data_block[i] > pivots[current_pivot]) {
+        send_counts[current_pivot] = i - send_displs[current_pivot];
+        current_pivot++;
+        send_displs[current_pivot] = i;
+    }
   }
-  send_counts[current_pivot] = &data_block[block_size] - send_buffers[current_pivot];
+  send_counts[current_pivot] = block_size - send_displs[current_pivot];
 
   // Communicate the send_counts to all processes to determine recv_counts
-  int *recv_counts = malloc(p * sizeof(int));
   MPI_Alltoall(send_counts, 1, MPI_INT, recv_counts, 1, MPI_INT, MPI_COMM_WORLD);
 
-  // Prepare for the all-to-all variable size data exchange
-  int total_recv = 0;
-  int *recv_displs = malloc(p * sizeof(int));
-  int *recv_data = NULL;
-
+  // Calculate the receive displacements
   recv_displs[0] = 0;
   for (i = 1; i < p; i++) {
       recv_displs[i] = recv_displs[i - 1] + recv_counts[i - 1];
-      total_recv += recv_counts[i - 1];
   }
-  total_recv += recv_counts[p - 1]; // add the last recv_count
 
-  recv_data = malloc(total_recv * sizeof(int));
+  // Allocate memory for the receive buffer based on recv_counts
+  int total_recv = recv_displs[p - 1] + recv_counts[p - 1];
+  int *recv_data = (int *)malloc(total_recv * sizeof(int));
 
-  // Now send and receive the partitions
-  MPI_Alltoallv(MPI_IN_PLACE, send_counts, send_displs, MPI_INT, 
-                recv_data, recv_counts, recv_displs, MPI_INT, 
+  // Perform the data exchange without MPI_IN_PLACE
+  int *send_data = (int *)malloc(block_size * sizeof(int));
+  memcpy(send_data, data_block, block_size * sizeof(int)); // Copy the local data to the send buffer
+
+  MPI_Alltoallv(send_data, send_counts, send_displs, MPI_INT,
+                recv_data, recv_counts, recv_displs, MPI_INT,
                 MPI_COMM_WORLD);
+  free(send_data);
 
-  // // The recv_data now needs to be merged, but we'll assume that's done in a separate step
-  // int *sorted_data = NULL;
-  // if (p_id == MASTER) sorted_data = (int *)malloc(size * sizeof(int));
+  // All processes participate in MPI_Allgather to share their total_recv sizes
+  MPI_Allgather(&total_recv, 1, MPI_INT, recv_counts, 1, MPI_INT, MPI_COMM_WORLD);
 
-  //MPI_Gather(recv_data, recv_counts, MPI_INT, sorted_data, recv_counts, MPI_INT, MASTER, MPI_COMM_WORLD);
+  // The recv_data now needs to be merged, but we'll assume that's done in a separate step
+  int *gather_displs= NULL;
+  int *sorted_data = NULL;
+  if (p_id == MASTER) {
 
-  // if (p_id == MASTER) {
-  //   printf("\n"); 
-  //   for(i = 0; i < size; i++) {
-  //     printf("%d ", sorted_data[i]);
-  //   }
-  //   printf("\n"); 
-  // }
+    gather_displs = (int *)malloc(p * sizeof(int));
+    sorted_data = (int *)malloc(size * sizeof(int)); 
+
+    gather_displs[0] = 0;
+    for (i = 1; i < p; i++) {
+        gather_displs[i] = gather_displs[i - 1] + recv_counts[i - 1];
+    }
+
+  }
+
+  MPI_Gatherv(recv_data, total_recv, MPI_INT, 
+            sorted_data, recv_counts, gather_displs, 
+            MPI_INT, MASTER, MPI_COMM_WORLD);
+
+  // Print the sorted array for verification
+  if (p_id == MASTER) {
+    printf("\n"); 
+    for(i = 0; i < size; i++) {
+      printf("%d ", sorted_data[i]);
+    }
+    printf("\n"); 
+  }
 
   // Clean up
   free(send_counts);
@@ -224,12 +239,12 @@ int main(int argc, char *argv[]) {
   free(recv_counts);
   free(recv_displs);
   free(recv_data);
-  for (i = 0; i < p; i++) {
-      if (i > 0) {
-          free(send_buffers[i]);
-      }
+
+  if (p_id == MASTER) {
+    free(gather_displs);
+    free(sorted_data); // Remember to free this only after the final sorted array is no longer needed
   }
-  free(send_buffers);
+
   free(pivots);
   free(regular_samples);
   free(data_block);
