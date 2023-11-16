@@ -8,7 +8,7 @@
 
 void swap(int* a, int* b);
 int parallel_partition(int *data_block, int low, int high, int pivot);
-void merge_arrays(int *merged_data, int merge_data_size, int *new_data, int new_data_size, int *recv_data, int recv_count);
+void merge_arrays(int *merged_data, int *send_data, int send_count, int *recv_data, int recv_count);
 int sequential_partition(int* data, int low, int high);
 void sequential_quicksort(int* data, int low, int high);
 
@@ -98,7 +98,8 @@ int main(int argc, char *argv[]) {
   MPI_Bcast(&size, 1, MPI_INT, MASTER, MPI_COMM_WORLD);
 
   // Calculate the size of each data block
-  block_size = (int)ceil((double)size / p);
+  // !!! Assumes n is divisible by p.. Need to account for when that isnt the case.
+  block_size = size / p; 
   data_block = (int *)malloc(block_size * sizeof(int));
   if (!data_block) {
     printf("Unable to allocate memory for the data block.");
@@ -116,109 +117,114 @@ int main(int argc, char *argv[]) {
    * Selects the rightmost index as pivot... Not a good pivot selection, done for simplicity * for now..
   */
 
-  //Allocate memory for merged data
-  int *merged_data = NULL;
-  merged_data = (int *)malloc((block_size * 2) * sizeof(int)); // Allocate enough memory
-  if (merged_data == NULL) {
-    printf("Unable to allocate memory for merged data.\n");
-    MPI_Abort(MPI_COMM_WORLD, 1);
-  }
-
-  // // # of dimensions of the hcube equals log base 2 of # processors
+  // # of dimensions of the hcube equals log base 2 of # processors
   d = (int)(log(p) / log(2));
 
-  // // Loop for every dimension of the hypercube
+  // Loop for every dimension of the hypercube
   for (i = 0; i < d; i++) {
 
-    int neighbor_id;
-    int *new_data, *send_data, *recv_data, *merge_data;
-    int new_data_size, send_data_size, recv_data_size, merge_data_size;
-    int mask = p;
-    int pivot;
+    int neighbor_id = p_id ^ (1 << i);
+    int *recv_data = NULL;
+    int recv_data_size = 0;
 
-    // Master process selects the pivot and broadcast to the other processes 
-    pivot = data_block[block_size-1];
+    // Master process selects the pivot and broadcast to the other processes
+    int pivot = data_block[block_size-1];
     MPI_Bcast(&pivot, 1, MPI_INT, MASTER, MPI_COMM_WORLD);
 
     // Partition data (D) such that D1 <= pivot < D2
-    int partitionI = parallel_partition(data_block, 0, block_size - 1, pivot);
+    int partition_index = parallel_partition(data_block, 0, block_size - 1, pivot);
 
-    // Checks if the ith bit is 0
-    mask = mask >> 1;
-    if ((p_id & mask) == 0) {
+    // Determine the size of data to send and receive
+    int send_data_size = (p_id & (1 << i)) ? partition_index : (block_size - partition_index);
+    int *send_data = (p_id & (1 << i)) ? data_block : (data_block + partition_index);
 
-      neighbor_id = p_id + mask;
-      send_data = &data_block[partitionI + 1];
-      send_data_size = block_size - partitionI - 1;
-      if (send_data_size < 0) send_data_size = 0;
-
-      new_data = &data_block[0];
-			new_data_size = partitionI + 1;
-
-    }
-    else {
-
-      neighbor_id = p_id - mask;
-      send_data = &data_block[0];
-      send_data_size = partitionI + 1;
-      if (send_data_size > block_size) send_data_size = partitionI;
-
-      new_data = &data_block[partitionI + 1];
-			new_data_size = block_size - partitionI - 1;
-			if (new_data_size < 0) new_data_size = 0;
-
-    }
-
+    // Allocate buffer for the incoming data
     MPI_Sendrecv(&send_data_size, 1, MPI_INT, neighbor_id, 0, &recv_data_size, 1, MPI_INT, neighbor_id, 0, MPI_COMM_WORLD, &status);
 
     recv_data = (int *)malloc(recv_data_size * sizeof(int));
-    MPI_Sendrecv(&send_data, send_data_size, MPI_INT, neighbor_id, 0, recv_data, recv_data_size, MPI_INT, neighbor_id, 0, MPI_COMM_WORLD, &status);
+    if (recv_data == NULL) {
+        fprintf(stderr, "Unable to allocate memory for receive buffer.\n");
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
 
-    merge_data_size = new_data_size + recv_data_size;
-    merge_data = (int *)malloc(merge_data_size * sizeof(int));
-    merge_arrays(merge_data, merge_data_size, new_data, new_data_size, recv_data, recv_data_size);
+    // Exchange the data
+    MPI_Sendrecv(send_data, send_data_size, MPI_INT, neighbor_id, 0, recv_data, recv_data_size, MPI_INT, neighbor_id, 0, MPI_COMM_WORLD, &status);
 
-    data_block = merge_data;
-    block_size = merge_data_size;
+    int *merge_data = NULL;
+    //int merge_data_size = 
 
     free(recv_data);
+    
+    // int neighbor_id;
+    // int *new_data, *send_data, *recv_data, *merge_data;
+    // int new_data_size, send_data_size, recv_data_size, merge_data_size;
+    // int mask = p;
+    // int pivot;
 
-    // // Get the id of the neighboring process along the ith dimension
-    // int neighbor_id = p_id ^ (1 << i); 
+    // // Master process selects the pivot and broadcast to the other processes 
+    // pivot = data_block[block_size-1];
+    // MPI_Bcast(&pivot, 1, MPI_INT, MASTER, MPI_COMM_WORLD);
 
-    // Calculate sizes of partitions to be sent and received
-    // int send_count = (p_id & (1 << i)) ? partitionI : block_size - partitionI;
-    // int *send_data = (p_id & (1 << i)) ? data_block : data_block + partitionI;
-    // int recv_count;
+    // // Partition data (D) such that D1 <= pivot < D2
+    // int partitionI = parallel_partition(data_block, 0, block_size - 1, pivot);
 
-    // // Exchange data sizes with the neighboring process
-    // MPI_Sendrecv(&send_count, 1, MPI_INT, neighbor_id, 0, &recv_count, 1, MPI_INT, neighbor_id, 0, MPI_COMM_WORLD, &status);
+    // // Checks if the ith bit is 0
+    // mask = mask >> 1;
+    // if ((p_id & mask) == 0) {
 
-    // // Allocate buffer for the incoming data
-    // int *recv_data = (int *)malloc(recv_count * sizeof(int));
-    // if (recv_data == NULL) {
-    //     printf("Unable to allocate memory for receive buffer.");
-    //     free(data);
-    //     MPI_Abort(MPI_COMM_WORLD, 1);
+    //   neighbor_id = p_id + mask;
+    //   send_data = &data_block[partitionI + 1];
+    //   send_data_size = block_size - partitionI - 1;
+    //   if (send_data_size < 0) send_data_size = 0;
+
+    //   new_data = &data_block[0];
+		// 	new_data_size = partitionI + 1;
+
+    // }
+    // else {
+
+    //   neighbor_id = p_id - mask;
+    //   send_data = &data_block[0];
+    //   send_data_size = partitionI + 1;
+    //   if (send_data_size > block_size) send_data_size = partitionI;
+
+    //   new_data = &data_block[partitionI + 1];
+		// 	new_data_size = block_size - partitionI - 1;
+		// 	if (new_data_size < 0) new_data_size = 0;
+
     // }
 
-    // // Exchange the partitioned data with the neighboring process
-    // MPI_Sendrecv(send_data, send_count, MPI_INT, neighbor_id, 0, recv_data, recv_count, MPI_INT, neighbor_id, 0, MPI_COMM_WORLD, &status);
+    // MPI_Sendrecv(&send_data_size, 1, MPI_INT, neighbor_id, 0, &recv_data_size, 1, MPI_INT, neighbor_id, 0, MPI_COMM_WORLD, &status);
 
-    // // Merge the data sets into data_block
-    // merge_arrays(merged_data, send_data, send_count, recv_data, recv_count);
+    // recv_data = (int *)malloc(recv_data_size * sizeof(int));
+    // MPI_Sendrecv(send_data, send_data_size, MPI_INT, neighbor_id, 0, recv_data, recv_data_size, MPI_INT, neighbor_id, 0, MPI_COMM_WORLD, &status);
 
-    // // Reset arrays
-    // free(data_block); 
-    // data_block = merged_data; 
-    // merged_data = NULL;
-    // block_size = send_count + recv_count;
+    // merge_data_size = new_data_size + recv_data_size;
+    // merge_data = (int *)malloc(merge_data_size * sizeof(int));
+    // merge_arrays(merge_data, send_data, send_data_size, recv_data, recv_data_size);
+
+    // data_block = merge_data;
+    // block_size = merge_data_size;
+
     // free(recv_data);
 
   }
 
   // Sort data using sequential quicksort
   sequential_quicksort(data_block, 0, block_size-1);
+
+  MPI_Barrier(MPI_COMM_WORLD);
+  for(i = 0; i < p; i++) {
+    if (i == p_id) {
+      int j;
+      printf("\nProcess %d: ", p_id);
+      for(j = 0; j < block_size; j++) {
+        printf("%d ", data_block[j]);
+      }
+      printf("\n");
+    }
+    MPI_Barrier(MPI_COMM_WORLD);
+  }
 
   // Gather all the processes data to the final sorted dataset
   if (p_id == MASTER) {
@@ -228,7 +234,7 @@ int main(int argc, char *argv[]) {
       MPI_Abort(MPI_COMM_WORLD, 1);
     }
   }
-  MPI_Gather(data_block, block_size, MPI_INT, sorted_data, block_size, MPI_INT, MASTER, MPI_COMM_WORLD);
+  MPI_Gather(data_block, 1, MPI_INT, sorted_data, 1, MPI_INT, MASTER, MPI_COMM_WORLD);
   
   // Print the sorted array to verify
   if (p_id == MASTER) {
@@ -241,7 +247,6 @@ int main(int argc, char *argv[]) {
   }
 
   // Clean up
-  free(merged_data);
   free(data_block);
   MPI_Finalize();
   
@@ -280,36 +285,22 @@ int parallel_partition(int *data_block, int low, int high, int pivot) {
 /**
  * Merges two arrays
 */
-void merge_arrays(int *merged_data, int merge_size, int *new_data, int new_size, int *recv_data, int recv_size) {
+void merge_arrays(int *merged_data, int *send_data, int send_count, int *recv_data, int recv_count) {
+    int i = 0, j = 0, k = 0;
 
-  int i;
-  for (i = 0; i < merge_size; i++) {
-		if (i < new_size)
-			merged_data[i] = new_data[i];
-		else
-			merged_data[i] = recv_data[i - new_size];
-	}
-
-    // int i = 0, j = 0, k = 0;
-
-    // // Merge the two arrays until one is empty
-    // while (i < send_count && j < recv_count) {
-    //     if (send_data[i] <= recv_data[j]) {
-    //         merged_data[k++] = send_data[i++];
-    //     } else {
-    //         merged_data[k++] = recv_data[j++];
-    //     }
-    // }
-
-    // // If send_data still has elements, add them to merged_data
-    // while (i < send_count) {
-    //     merged_data[k++] = send_data[i++];
-    // }
-
-    // // If recv_data still has elements, add them to merged_data
-    // while (j < recv_count) {
-    //     merged_data[k++] = recv_data[j++];
-    // }
+    while (i < send_count && j < recv_count) {
+        if (send_data[i] < recv_data[j]) {
+            merged_data[k++] = send_data[i++];
+        } else {
+            merged_data[k++] = recv_data[j++];
+        }
+    }
+    while (i < send_count) {
+        merged_data[k++] = send_data[i++];
+    }
+    while (j < recv_count) {
+        merged_data[k++] = recv_data[j++];
+    }
 }
 
 /**
