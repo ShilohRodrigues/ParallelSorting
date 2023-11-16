@@ -76,6 +76,7 @@ int main(int argc, char *argv[]) {
     fclose(fp); // Close the file
 
     // Print the numbers to verify
+    printf("Input Size: %d \n", size);
     for(i = 0; i < size; i++) {
       printf("%d ", data[i]);
     }
@@ -104,6 +105,21 @@ int main(int argc, char *argv[]) {
   // Each process sorts its own sublist sequentially
   sequential_quicksort(data_block, 0, block_size - 1);
 
+  // Print each processes data_block for testing
+  if (p_id==MASTER) printf("\nPrinting each data block: \n");
+  MPI_Barrier(MPI_COMM_WORLD);
+  for (i=0; i<p; i++) {
+    MPI_Barrier(MPI_COMM_WORLD);
+    if (p_id == i) {
+      printf("\n"); 
+      for(j = 0; j < block_size; j++) {
+        printf("%d ", data_block[j]);
+      }
+      printf("\n"); 
+    }
+  }
+  MPI_Barrier(MPI_COMM_WORLD);
+
   /**
    * Sort using PSRS.
    * 
@@ -131,8 +147,17 @@ int main(int argc, char *argv[]) {
   // Send samples to the master process
   MPI_Gather(regular_samples, p, MPI_INT, master_regular_samples, p, MPI_INT, MASTER, MPI_COMM_WORLD);
 
+  MPI_Barrier(MPI_COMM_WORLD);
+  
   // Master sorts samples and chooses pivots
   if (p_id == MASTER) {
+
+    // Print samples for testing
+    printf("\nUnsorted Regular Samples: "); 
+    for(i = 0; i < (p*p); i++) {
+      printf("%d ", master_regular_samples[i]);
+    }
+    printf("\n"); 
 
     sequential_quicksort(master_regular_samples, 0, ((p*p)-1));
     for(i=1; i<p; i++) {
@@ -141,7 +166,7 @@ int main(int argc, char *argv[]) {
     }
 
     // Print samples for testing
-    printf("\n"); 
+    printf("\nSorted Regular Samples: "); 
     for(i = 0; i < (p*p); i++) {
       printf("%d ", master_regular_samples[i]);
     }
@@ -156,12 +181,14 @@ int main(int argc, char *argv[]) {
 
   // Print the pivots for testing
   if (p_id == MASTER) {
-    printf("\n"); 
+    printf("\nPivots: "); 
     for(i = 0; i < (p-1); i++) {
       printf("%d ", pivots[i]);
     }
     printf("\n"); 
   }
+
+  MPI_Barrier(MPI_COMM_WORLD);
   
   // Partition the local sublists based on the received pivots
   int *send_counts = (int *)calloc(p, sizeof(int));
