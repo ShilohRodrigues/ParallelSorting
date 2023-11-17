@@ -1,14 +1,15 @@
+#include "s_quicksort.h"
 #include <mpi.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
+#include <time.h>
 #include <string.h>
 
 #define MASTER 0 // task ID of master task 
 
-void swap(int* a, int* b);
-int sequential_partition(int* data, int low, int high);
-void sequential_quicksort(int* data, int low, int high);
+int parseFile(int **output, char *path, int *size);
+void getRandomData(int *output, int size);
 
 int main(int argc, char *argv[]) {
 
@@ -23,7 +24,6 @@ int main(int argc, char *argv[]) {
     
   int *data = NULL; // Holds the data to be sorted
   int size = 0;
-  int capacity = 10; // Will grow as needed
   int *data_block = NULL; // Holds the data for each process (size = n/p)
   int block_size;
 
@@ -42,48 +42,33 @@ int main(int argc, char *argv[]) {
   } 
 
   /**
-   * Master process reads input file
+   * Master process checks cmd line arg, needs minimum 3 arguments.
+   * 2nd argument says whether a file will be read or if random values will be used.
    * Check if there is an input file present and parse the data from the file
-   * Check command line arg for file name, otherwise use default input.txt
-   * Parses for space separated integers.
+   * Otherwise create random values.
   */
   if (p_id == MASTER) {
 
-    FILE *fp;
-
-    // Attempt to open the file
-    if ( argc != 2 )
-      fp = fopen("../input.txt", "r");
-    else
-      fp = fopen(argv[1], "r");
-
-    if (fp == NULL) { 
+    if (argc != 3) {
+      perror("Two arguments must be stated. \n1st argument: 'file' or 'random', 2nd argument: 'file_path' or data_size");
       MPI_Abort(MPI_COMM_WORLD, 1);
     }
 
-    // Allocate initial memory to the data array
-    data = (int *)malloc(capacity * sizeof(int));
-    if (!data) {
-      fclose(fp);
+    if (strcmp(argv[1], "file") == 0) { // Parse the input file
+      if (parseFile(&data, argv[2], &size) != 0) MPI_Abort(MPI_COMM_WORLD, 1);
+    }  
+    else if (strcmp(argv[1], "random") == 0) { // Populate data from random values
+      size = atoi(argv[2]);
+      data = (int *)malloc(size * sizeof(int));
+      getRandomData(data, size);
+    }
+    else {
+      perror("Two arguments must be stated. \n1st argument: 'file' or 'random', 2nd argument: 'file_path' or data_size");
       MPI_Abort(MPI_COMM_WORLD, 1);
     }
-
-    // Read the input file and parse for integers
-    while (fscanf(fp, "%d", &data[size]) != EOF) {
-      size++;
-      if (size >= capacity) {
-        // Double the capacity if needed
-        capacity *= 2;
-        data = (int *)realloc(data, capacity * sizeof(int));
-        if (!data) {
-            fclose(fp);
-            MPI_Abort(MPI_COMM_WORLD, 1);
-        }
-      }
-    }
-    fclose(fp); // Close the file
 
     // Print the numbers to verify
+    printf("Input Size: %d \n", size);
     for(i = 0; i < size; i++) {
       printf("%d ", data[i]);
     }
@@ -184,7 +169,7 @@ int main(int argc, char *argv[]) {
   }
 
   // Sort data using sequential quicksort
-  sequential_quicksort(data_block, 0, block_size-1);
+  quicksort(data_block, 0, block_size-1);
 
   // Prepare for the final gather
   int *recv_counts = (int *)malloc(p * sizeof(int)); 
@@ -224,43 +209,52 @@ int main(int argc, char *argv[]) {
 }
 
 /**
- * Swaps two elements, passed by reference so that the original references are swapped
+ * Parses a space separated input file into an array. 
 */
-void swap(int* a, int* b) {
-  int temp = *a;
-  *a = *b;
-  *b = temp;
-}
+int parseFile(int **output, char *path, int *size) {
 
-/**
- * Partitions the array using the rightmost index
-*/
-int sequential_partition(int* data, int low, int high) {
+  int capacity = 10; // Will grow as needed
 
-  int pivot = data[high];
-  int i = (low - 1);
-  int j;
-  for(j = low; j < high; j++) {
-    if(data[j] <= pivot) {
-      i++;
-      swap(&data[i], &data[j]);
-    }
+  FILE *fp;
+  fp = fopen(path, "r");
+  
+  if (fp == NULL) return 1; // Could not open file
+
+  // Allocate initial memory to the data array
+  *output = (int *)malloc(capacity * sizeof(int));
+  if (!*output) {
+    fclose(fp);
+    return 1;
   }
-  swap(&data[i+1], &data[high]);
 
-  return (i+1);
+  *size = 0; // Initialize size to 0
+  int value;
+  // Read the input file and parse for integers
+  while (fscanf(fp, "%d", &value) != EOF) {
+    if (*size >= capacity) {
+      // Double the capacity if needed
+      capacity *= 2;
+      int *new_output = (int *)realloc(*output, capacity * sizeof(int));
+      if (!new_output) {
+        free(*output);
+        fclose(fp);
+        return 1;
+      }
+      *output = new_output;
+    }
+    (*output)[*size] = value;
+    (*size)++;
+  }
+  fclose(fp); // Close the file
 
+  return 0;
 }
 
-/**
- * Recursive quicksort 
-*/
-void sequential_quicksort(int* data, int low, int high) {
-
-  if (low >= high) return;
-
-  int p = sequential_partition(data, low, high);
-  sequential_quicksort(data, low, p-1);
-  sequential_quicksort(data, p+1, high);
-
+void getRandomData(int *output, int size) {
+  int i;
+  // Seed the random number generator to get different results each time
+  srand(time(NULL));
+  for (i = 0; i < size; i++) {
+      output[i] = rand() % 1000; // rand() % 1000 gives a range of 0 to 999
+  }
 }

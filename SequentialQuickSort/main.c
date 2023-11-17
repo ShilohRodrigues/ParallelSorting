@@ -1,6 +1,11 @@
 #include "quicksort.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
+#include <string.h>
+
+int parseFile(int **output, char *path, int *size);
+void getRandomData(int *output, int size);
 
 int main(int argc, char *argv[]) {
 
@@ -9,47 +14,34 @@ int main(int argc, char *argv[]) {
    * Check command line arg for file name, otherwise use default input.txt
    * Parses for space separated integers.
   */
-  FILE *fp;
   int *data = NULL; // Holds the data to be sorted
   int size = 0;
-  int capacity = 10; // Will grow as needed
+  int i, j;
 
-  // Attempt to open the file
-  if ( argc != 2 )
-    fp = fopen("../input.txt", "r");
-  else
-    fp = fopen(argv[1], "r");
-
-  if (fp == NULL) { 
-    return 1; // Could not open the file
+  if (argc != 3) {
+    perror("Two arguments must be stated. \n1st argument: 'file' or 'random', 2nd argument: 'file_path' or data_size");
+    return 1;
   }
 
-  // Allocate initial memory to the data array
-  data = (int *)malloc(capacity * sizeof(int));
-  if (!data) {
-    fclose(fp);
-    return 1; // Could not allocate memory
+  if (strcmp(argv[1], "file") == 0) { // Parse the input file
+    if (parseFile(&data, argv[2], &size) != 0) return 1;
+  }  
+  else if (strcmp(argv[1], "random") == 0) { // Populate data from random values
+    size = atoi(argv[2]);
+    data = (int *)malloc(size * sizeof(int));
+    getRandomData(data, size);
   }
-
-  // Read the input file and parse for integers
-  while (fscanf(fp, "%d", &data[size]) != EOF) {
-    size++;
-    if (size >= capacity) {
-      // Double the capacity if needed
-      capacity *= 2;
-      data = (int *)realloc(data, capacity * sizeof(int));
-      if (!data) {
-          fclose(fp);
-          return 1; // Could not allocate memory
-      }
-    }
+  else {
+    perror("Two arguments must be stated. \n1st argument: 'file' or 'random', 2nd argument: 'file_path' or data_size");
+    return 1;
   }
 
   // Print the numbers to verify
-  for(int i = 0; i < size; i++) {
+  printf("Input Size: %d \n", size);
+  for(i = 0; i < size; i++) {
     printf("%d ", data[i]);
   }
-  printf("\n");
+  printf("\n\n");
 
   //Perform quicksort
   quicksort(data, 0, size-1);
@@ -61,9 +53,58 @@ int main(int argc, char *argv[]) {
   printf("\n");
 
   //Clean up
-  fclose(fp);
   free(data);
 
   return 0;
 }
 
+/**
+ * Parses a space separated input file into an array. 
+*/
+int parseFile(int **output, char *path, int *size) {
+
+  int capacity = 10; // Will grow as needed
+
+  FILE *fp;
+  fp = fopen(path, "r");
+  
+  if (fp == NULL) return 1; // Could not open file
+
+  // Allocate initial memory to the data array
+  *output = (int *)malloc(capacity * sizeof(int));
+  if (!*output) {
+    fclose(fp);
+    return 1;
+  }
+
+  *size = 0; // Initialize size to 0
+  int value;
+  // Read the input file and parse for integers
+  while (fscanf(fp, "%d", &value) != EOF) {
+    if (*size >= capacity) {
+      // Double the capacity if needed
+      capacity *= 2;
+      int *new_output = (int *)realloc(*output, capacity * sizeof(int));
+      if (!new_output) {
+        free(*output);
+        fclose(fp);
+        return 1;
+      }
+      *output = new_output;
+    }
+    (*output)[*size] = value;
+    (*size)++;
+  }
+  fclose(fp); // Close the file
+
+  return 0;
+}
+
+void getRandomData(int *output, int size) {
+  int i;
+  // Seed the random number generator to get different results each time
+  srand(time(NULL));
+  for (i = 0; i < size; i++) {
+      output[i] = rand() % 1000; // rand() % 1000 gives a range of 0 to 999
+  }
+}
