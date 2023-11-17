@@ -3,9 +3,11 @@
 #include <stdlib.h>
 #include <math.h>
 #include <string.h>
+#include <limits.h>
 
 #define MASTER 0 // task ID of master task 
 
+int* mergeKArrays(int **arrays, int k, int *sizes, int totalSize);
 void swap(int* a, int* b);
 int sequential_partition(int* data, int low, int high);
 void sequential_quicksort(int* data, int low, int high);
@@ -105,21 +107,6 @@ int main(int argc, char *argv[]) {
   // Each process sorts its own sublist sequentially
   sequential_quicksort(data_block, 0, block_size - 1);
 
-  // Print each processes data_block for testing
-  if (p_id==MASTER) printf("\nPrinting each data block: \n");
-  MPI_Barrier(MPI_COMM_WORLD);
-  for (i=0; i<p; i++) {
-    MPI_Barrier(MPI_COMM_WORLD);
-    if (p_id == i) {
-      printf("\n"); 
-      for(j = 0; j < block_size; j++) {
-        printf("%d ", data_block[j]);
-      }
-      printf("\n"); 
-    }
-  }
-  MPI_Barrier(MPI_COMM_WORLD);
-
   /**
    * Sort using PSRS.
    * 
@@ -131,7 +118,6 @@ int main(int argc, char *argv[]) {
    * Each process merges partitions and combines results
    * 
   */
-
   int *regular_samples = (int *)malloc(p * sizeof(int));  
   int *master_regular_samples = NULL;
   int *pivots = (int *)malloc((p-1) * sizeof(int));;
@@ -147,62 +133,42 @@ int main(int argc, char *argv[]) {
   // Send samples to the master process
   MPI_Gather(regular_samples, p, MPI_INT, master_regular_samples, p, MPI_INT, MASTER, MPI_COMM_WORLD);
 
-  MPI_Barrier(MPI_COMM_WORLD);
-  
   // Master sorts samples and chooses pivots
   if (p_id == MASTER) {
 
-    // Print samples for testing
-    printf("\nUnsorted Regular Samples: "); 
-    for(i = 0; i < (p*p); i++) {
-      printf("%d ", master_regular_samples[i]);
-    }
-    printf("\n"); 
-
     sequential_quicksort(master_regular_samples, 0, ((p*p)-1));
+
+    // Select pivots
     for(i=1; i<p; i++) {
       int pivot = (i*p) + (p/2) - 1;
       pivots[i-1] = master_regular_samples[pivot];
     }
 
-    // Print samples for testing
-    printf("\nSorted Regular Samples: "); 
-    for(i = 0; i < (p*p); i++) {
-      printf("%d ", master_regular_samples[i]);
-    }
-    printf("\n"); 
-
     free(master_regular_samples);
 
   }
 
-  // Send pivots
+  // Send pivots to all processes
   MPI_Bcast(pivots, (p-1), MPI_INT, MASTER, MPI_COMM_WORLD);
 
-  // Print the pivots for testing
-  if (p_id == MASTER) {
-    printf("\nPivots: "); 
-    for(i = 0; i < (p-1); i++) {
-      printf("%d ", pivots[i]);
-    }
-    printf("\n"); 
-  }
-
-  MPI_Barrier(MPI_COMM_WORLD);
-  
-  // Partition the local sublists based on the received pivots
+  /**
+   * Prepare the data for the partitioning and exchanging
+   * 
+  */ 
   int *send_counts = (int *)calloc(p, sizeof(int));
   int *send_displs = (int *)calloc(p, sizeof(int));
   int *recv_counts = (int *)malloc(p * sizeof(int));
   int *recv_displs = (int *)malloc(p * sizeof(int));
+  int *new_data_block = NULL;
+  int *sorted_data = NULL;
 
-  // Calculate the send counts and displacements
+  // Find the amount of data to send from each process to each process
   int current_pivot = 0;
   for (i = 0; i < block_size; i++) {
     if (current_pivot < (p-1) && data_block[i] > pivots[current_pivot]) {
-        send_counts[current_pivot] = i - send_displs[current_pivot];
-        current_pivot++;
-        send_displs[current_pivot] = i;
+      send_counts[current_pivot] = i - send_displs[current_pivot];
+      current_pivot++;
+      send_displs[current_pivot] = i;
     }
   }
   send_counts[current_pivot] = block_size - send_displs[current_pivot];
@@ -210,48 +176,73 @@ int main(int argc, char *argv[]) {
   // Communicate the send_counts to all processes to determine recv_counts
   MPI_Alltoall(send_counts, 1, MPI_INT, recv_counts, 1, MPI_INT, MPI_COMM_WORLD);
 
-  // Calculate the receive displacements
+  // Find how much data each process will receive from each process
   recv_displs[0] = 0;
   for (i = 1; i < p; i++) {
-      recv_displs[i] = recv_displs[i - 1] + recv_counts[i - 1];
+    recv_displs[i] = recv_displs[i - 1] + recv_counts[i - 1];
   }
 
-  // Allocate memory for the receive buffer based on recv_counts
-  int total_recv = recv_displs[p - 1] + recv_counts[p - 1];
-  int *recv_data = (int *)malloc(total_recv * sizeof(int));
+  // Calculate the total number of elements each processor will receive. Sum of recv count..
+  int new_block_size = 0;
+  for (i=0; i<p; i++) {
+    new_block_size += recv_counts[i];
+  }
+  new_data_block = (int *)malloc(new_block_size * sizeof(int));
 
-  // Perform the data exchange without MPI_IN_PLACE
-  int *send_data = (int *)malloc(block_size * sizeof(int));
-  memcpy(send_data, data_block, block_size * sizeof(int)); // Copy the local data to the send buffer
+  // Send all the data to its appropriate process
+  MPI_Alltoallv(data_block, send_counts, send_displs, MPI_INT, new_data_block, recv_counts, recv_displs, MPI_INT, MPI_COMM_WORLD);
 
-  MPI_Alltoallv(send_data, send_counts, send_displs, MPI_INT,
-                recv_data, recv_counts, recv_displs, MPI_INT,
-                MPI_COMM_WORLD);
-  free(send_data);
+  free(pivots);
+  free(regular_samples);
+  free(data_block);
+  
+  /**
+   * Now each process contains p partitioned sorted sub lists.
+   * These sublists are combined in new_data_block and need to be separated to be merged properly
+   * Could be more efficient if the partitions are not gathered, maybe an alternative to MPI_Alltoallv could be used to keep partitions separated...
+   * */  
+  int **partitioned_data = (int **)malloc((p) * sizeof(int *)); //Create a 2d array of partitioned data
+  int partitionI = 0;
+  for (i=0; i<p; i++) {
+    partitioned_data[i] = &new_data_block[partitionI];
+    partitionI = recv_displs[i+1];
+  }
+  
+  // Merge p number of sorted sub lists
+  int *merged_data_block = mergeKArrays(partitioned_data, p, recv_counts, new_block_size);
 
-  // All processes participate in MPI_Allgather to share their total_recv sizes
-  MPI_Allgather(&total_recv, 1, MPI_INT, recv_counts, 1, MPI_INT, MPI_COMM_WORLD);
+  // Free arrays used for merging and broadcasts
+  free(new_data_block);
+  free(partitioned_data);
+  free(send_counts);
+  free(send_displs);
+  free(recv_counts);
+  free(recv_displs);
 
-  // The recv_data now needs to be merged, but we'll assume that's done in a separate step
-  int *gather_displs= NULL;
-  int *sorted_data = NULL;
-  if (p_id == MASTER) {
+  // Gather all of the sorted processes arrays into the master
+  if (p_id == MASTER) sorted_data = (int *)malloc(size * sizeof(int)); // Prepare receive buffer
 
-    gather_displs = (int *)malloc(p * sizeof(int));
-    sorted_data = (int *)malloc(size * sizeof(int)); 
+  recv_counts = (int *)malloc(p * sizeof(int)); // Elements received from each processor
+  recv_displs = (int *)malloc(p * sizeof(int)); // Elements received from each processor
 
-    gather_displs[0] = 0;
-    for (i = 1; i < p; i++) {
-        gather_displs[i] = gather_displs[i - 1] + recv_counts[i - 1];
-    }
+  // Perform an Allgather, to get the number of elements each processor will return
+  MPI_Allgather(&new_block_size, 1, MPI_INT, recv_counts, 1, MPI_INT, MPI_COMM_WORLD); 
 
+  // Displacement values for the gatherv
+  recv_displs[0] = 0;
+  for (i = 1; i < p; i++) {
+    recv_displs[i] = recv_displs[i - 1] + recv_counts[i - 1];
   }
 
-  MPI_Gatherv(recv_data, total_recv, MPI_INT, 
-            sorted_data, recv_counts, gather_displs, 
-            MPI_INT, MASTER, MPI_COMM_WORLD);
+  // Gathers all of the sorted sub arrays
+  MPI_Gatherv(merged_data_block, new_block_size, MPI_INT, sorted_data, recv_counts, recv_displs, MPI_INT, MASTER, MPI_COMM_WORLD);
+
+  // Free arrays used for gathering
+  free(recv_counts);
+  free(recv_displs);
 
   // Print the sorted array for verification
+  MPI_Barrier(MPI_COMM_WORLD);
   if (p_id == MASTER) {
     printf("\n"); 
     for(i = 0; i < size; i++) {
@@ -260,24 +251,53 @@ int main(int argc, char *argv[]) {
     printf("\n"); 
   }
 
+
+  /* Do something with the sorted array */
+
   // Clean up
-  free(send_counts);
-  free(send_displs);
-  free(recv_counts);
-  free(recv_displs);
-  free(recv_data);
-
+  free(merged_data_block);
   if (p_id == MASTER) {
-    free(gather_displs);
-    free(sorted_data); // Remember to free this only after the final sorted array is no longer needed
+    free(sorted_data);
   }
-
-  free(pivots);
-  free(regular_samples);
-  free(data_block);
   MPI_Finalize();
 
   return 0;
+
+}
+
+/**
+ * Merge sorted arrays
+*/
+int *mergeKArrays(int **arrays, int k, int *sizes, int totalSize) {
+
+  // Allocate memory for the merged array
+  int *mergedArray = (int *)malloc(totalSize * sizeof(int));
+
+  // Array to keep track of the current index of each array
+  int *indices = (int *)calloc(k, sizeof(int));
+
+  // Merge arrays
+  for (int i = 0; i < totalSize; ++i) {
+      int minIndex = -1;
+      int minValue = INT_MAX;
+
+      // Find the smallest element among the current elements of the arrays
+      for (int j = 0; j < k; ++j) {
+          if (indices[j] < sizes[j] && arrays[j][indices[j]] < minValue) {
+              minValue = arrays[j][indices[j]];
+              minIndex = j;
+          }
+      }
+
+      // Add the smallest element to the merged array
+      mergedArray[i] = minValue;
+
+      // Increment the index of the array from which the element was taken
+      indices[minIndex]++;
+  }
+
+  free(indices);
+  return mergedArray;
 
 }
 
