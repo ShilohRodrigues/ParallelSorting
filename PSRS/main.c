@@ -270,6 +270,7 @@ int main(int argc, char *argv[]) {
 */
 int *mergeKArrays(int **arrays, int k, int *sizes, int totalSize) {
 
+  int i, j;
   // Allocate memory for the merged array
   int *mergedArray = (int *)malloc(totalSize * sizeof(int));
 
@@ -277,12 +278,12 @@ int *mergeKArrays(int **arrays, int k, int *sizes, int totalSize) {
   int *indices = (int *)calloc(k, sizeof(int));
 
   // Merge arrays
-  for (int i = 0; i < totalSize; ++i) {
+  for (i = 0; i < totalSize; ++i) {
       int minIndex = -1;
       int minValue = INT_MAX;
 
       // Find the smallest element among the current elements of the arrays
-      for (int j = 0; j < k; ++j) {
+      for (j = 0; j < k; ++j) {
           if (indices[j] < sizes[j] && arrays[j][indices[j]] < minValue) {
               minValue = arrays[j][indices[j]];
               minIndex = j;
