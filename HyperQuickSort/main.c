@@ -26,7 +26,6 @@ int main(int argc, char *argv[]) {
   int capacity = 10; // Will grow as needed
   int *data_block = NULL; // Holds the data for each process (size = n/p)
   int block_size;
-  int *sorted_data = NULL; // Will hold the final sorted data
 
   MPI_Status status;
 
@@ -110,21 +109,11 @@ int main(int argc, char *argv[]) {
   // Free data since it is separated amongst processes
   if (p_id == MASTER) free(data);
 
-  // Print separated data blocks for testing
-  MPI_Barrier(MPI_COMM_WORLD);
-  for(i = 0; i < p; i++) {
-    if (i == p_id) {
-      printf("\nProcess %d: ", p_id);
-      for(j = 0; j < block_size; j++) {
-        printf("%d ", data_block[j]);
-      }
-      printf("\n");
-    }
-    MPI_Barrier(MPI_COMM_WORLD);
-  }
-
   /**
    * Hypercube quick sort:
+   * Globally sorts the elements by exchanging between neighboring processes, 
+   * then locally sorts using sequential quicksort,
+   * finally, gathers all sub arrays into final sorted array.
    * Selects the rightmost index as pivot... Not a good pivot selection, done for simplicity for now..
   */
 
@@ -135,12 +124,14 @@ int main(int argc, char *argv[]) {
   for (i = 0; i < d; i++) {
 
     int pivot;
-    int partner = p_id ^ (1 << i);
+    int neighbor = p_id ^ (1 << i);
     int *B1 = (int *)malloc(block_size * sizeof(int));
     int *B2 = (int *)malloc(block_size * sizeof(int));;
     int B1_size = 0, B2_size = 0;
-    int *received_block = NULL;
-    int received_size;
+    int *send_buffer = NULL;
+    int *recv_buffer = NULL;
+    int send_size;
+    int recv_size;
 
     // Master process selects the pivot and broadcast to the other processes
     if (p_id == MASTER) pivot = data_block[block_size-1];
@@ -156,63 +147,80 @@ int main(int argc, char *argv[]) {
       }
     }
 
-    // Prepare the buffers for sending and receiving
-    int *send_buffer = (p_id & (1 << i)) ? B2 : B1;
-    int send_size = (p_id & (1 << i)) ? B2_size : B1_size;
+    // Check ith bit, determines if sending B1 or B2
+    if ((p_id & (1 << i)) == 0) {
+      send_buffer = B2;
+      send_size = B2_size;
+    }
+    else {
+      send_buffer = B1;
+      send_size = B1_size;
+    }
 
-    int recv_size;
-    // Probe to get the size of incoming data
-    MPI_Probe(partner, 0, MPI_COMM_WORLD, &status);
-    MPI_Get_count(&status, MPI_INT, &recv_size);
-    int *recv_buffer = (int *)malloc(recv_size * sizeof(int));
+    // Notify neighbor how much data will be sent, and find out how much the neighbor is sending back
+    MPI_Sendrecv(&send_size, 1, MPI_INT, neighbor, 0, &recv_size, 1, MPI_INT, neighbor, 0, MPI_COMM_WORLD, &status);
 
-    // Now send and receive using MPI_Sendrecv
-    MPI_Sendrecv(send_buffer, send_size, MPI_INT, partner, 0, recv_buffer, recv_size, MPI_INT, partner, 0, MPI_COMM_WORLD, &status);
+    // Prepare the receving buffer 
+    recv_buffer = (int *)malloc(recv_size * sizeof(int));
 
-    // The data_block is now the received buffer
+    // Now send and receive B1 or B2
+    MPI_Sendrecv(send_buffer, send_size, MPI_INT, neighbor, 0, recv_buffer, recv_size, MPI_INT, neighbor, 0, MPI_COMM_WORLD, &status);
+
+    // Make data_block = B1|B2 concat recv_buffer
     free(data_block);
-    data_block = recv_buffer;
-    block_size = recv_size;
-
-    // Prepare B1 and B2 for the next iteration if needed
-    free(B1);
-    free(B2);
-    free(send_buffer);
-    free(recv_buffer);
-
+    if ((p_id & (1 << i)) == 0) {
+      block_size = B1_size + recv_size; 
+      data_block = (int *)malloc(block_size * sizeof(int));
+      memcpy(data_block, B1, B1_size * sizeof(int));
+      memcpy(data_block+B1_size, recv_buffer, recv_size * sizeof(int));
+    }
+    else {
+      block_size = B2_size + recv_size; 
+      data_block = (int *)malloc(block_size * sizeof(int));
+      memcpy(data_block, B2, B2_size * sizeof(int));
+      memcpy(data_block+B2_size, recv_buffer, recv_size * sizeof(int));
+    }
 
   }
 
   // Sort data using sequential quicksort
   sequential_quicksort(data_block, 0, block_size-1);
 
-  // Gather all the processes data to the final sorted dataset
-  // To do: Change to a gatherv, since the datablocks will have varied sizes after exchanges
-  if (p_id == MASTER) {
-    sorted_data = (int *)malloc(size * sizeof(int));
-    if (!sorted_data) {
-      printf("Error: Unable to allocate memory for the sorted data.\n");
-      MPI_Abort(MPI_COMM_WORLD, 1);
-    }
+  // Prepare for the final gather
+  int *recv_counts = (int *)malloc(p * sizeof(int)); 
+  int *recv_displs = (int *)malloc(p * sizeof(int)); 
+  if (p_id == MASTER) data = (int *)malloc(size * sizeof(int));
+
+  // Perform an Allgather, to get the number of elements each processor will return
+  MPI_Allgather(&block_size, 1, MPI_INT, recv_counts, 1, MPI_INT, MPI_COMM_WORLD); 
+
+  // Displacement values for the gatherv
+  recv_displs[0] = 0;
+  for (i = 1; i < p; i++) {
+    recv_displs[i] = recv_displs[i - 1] + recv_counts[i - 1];
   }
-  MPI_Gather(data_block, block_size, MPI_INT, sorted_data, block_size, MPI_INT, MASTER, MPI_COMM_WORLD);
+
+  // Gathers all of the processors arrays into final sorted array
+  MPI_Gatherv(data_block, block_size, MPI_INT, data, recv_counts, recv_displs, MPI_INT, MASTER, MPI_COMM_WORLD);
   
   // Print the sorted array to verify
   if (p_id == MASTER) {
     printf("\n"); 
     for(i = 0; i < size; i++) {
-      printf("%d ", sorted_data[i]);
+      printf("%d ", data[i]);
     }
     printf("\n"); 
-    
   }
 
   // Clean up
+  free(recv_counts);
+  free(recv_displs);
   free(data_block);
-  if (p_id == MASTER) free(sorted_data);
+  if (p_id == MASTER) free(data);
   MPI_Finalize();
   
   return 0;
+
 }
 
 /**
