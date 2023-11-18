@@ -27,6 +27,8 @@ int main(int argc, char *argv[]) {
   int *data_block = NULL; // Holds the data for each process (size = n/p)
   int block_size;
 
+  clock_t t; // To measure the sorting time
+
   MPI_Status status;
 
   // Start separate tasks and get task ids 
@@ -75,6 +77,9 @@ int main(int argc, char *argv[]) {
     printf("\n");
     
   }
+
+  // Start the sorting timer
+  t = clock();
 
   // Set the size of the input data to each process, so they can calculate their block size
   MPI_Bcast(&size, 1, MPI_INT, MASTER, MPI_COMM_WORLD);
@@ -196,6 +201,11 @@ int main(int argc, char *argv[]) {
     }
     printf("\n"); 
   }
+
+  // Stop the sorting timer
+  t = clock() - t;
+  double time_taken = (((double)t)/CLOCKS_PER_SEC)*1000; // in ms
+  if (p_id == MASTER) printf("\n\nTime elapsed: %f\n", time_taken);
 
   // Clean up
   free(recv_counts);

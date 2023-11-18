@@ -43,6 +43,9 @@ int main(int argc, char *argv[]) {
   }
   printf("\n\n");
 
+  // Start the sorting timer
+  clock_t t = clock();
+
   //Perform quicksort
   quicksort(data, 0, size-1);
 
@@ -51,6 +54,11 @@ int main(int argc, char *argv[]) {
     printf("%d ", data[i]);
   }
   printf("\n");
+
+  // Stop the sorting timer
+  t = clock() - t;
+  double time_taken = (((double)t)/CLOCKS_PER_SEC)*1000; // in ms
+  printf("\n\nTime elapsed: %f\n", time_taken);
 
   //Clean up
   free(data);
