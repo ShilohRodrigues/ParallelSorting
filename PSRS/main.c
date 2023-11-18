@@ -334,9 +334,10 @@ int parseFile(int **output, char *path, int *size) {
 }
 
 void getRandomData(int *output, int size) {
+  int i;
   // Seed the random number generator to get different results each time
   srand(time(NULL));
-  for (int i = 0; i < size; i++) {
+  for (i = 0; i < size; i++) {
       output[i] = rand() % 1000; // rand() % 1000 gives a range of 0 to 999
   }
 }
